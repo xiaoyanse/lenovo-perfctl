@@ -3,3 +3,5 @@ tools/
 *.exe
 *.log
 *.pdb
+LenovoPerfCtl.json
+DiskInfoToolkit.resources.dll

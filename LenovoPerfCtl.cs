@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.InteropServices;
@@ -18,6 +18,31 @@ using Microsoft.Win32;
 // 模式: 1=智能 2=省电 3=性能 4=极客 5=极客自定义
 // 快捷键: Ctrl+Alt+1/2/3/4 直切 ｜ Ctrl+Alt+Q 循环
 // 开机自启 = 计划任务（登录时、最高权限，避免 Run 键无提权失效）
+// 极简 key=value 配置（exe 旁 LenovoPerfCtl.json）
+static class Config {
+    static System.Collections.Generic.Dictionary<string, string> map =
+        new System.Collections.Generic.Dictionary<string, string>(StringComparer.Ordinal);
+    static string path;
+    public static void Load(string p) {
+        path = p;
+        try {
+            foreach (string line in System.IO.File.ReadAllLines(p)) {
+                int eq = line.IndexOf('=');
+                if (eq > 0) map[line.Substring(0, eq).Trim()] = line.Substring(eq + 1).Trim();
+            }
+        } catch { }
+    }
+    public static string Get(string k) { return map.ContainsKey(k) ? map[k] : null; }
+    public static void Set(string k, string v) {
+        map[k] = v;
+        try {
+            var sb = new System.Text.StringBuilder();
+            foreach (var kv in map) sb.Append(kv.Key).Append('=').Append(kv.Value).AppendLine();
+            System.IO.File.WriteAllText(path, sb.ToString());
+        } catch { }
+    }
+}
+
 static class LenovoPerfCtl {
     static readonly string[] ModeNames = { "无", "智能", "省电", "性能", "极客", "极客自定义" };
     static readonly uint[] Cycle = { 1, 2, 3, 4 };
@@ -103,7 +128,7 @@ static class LenovoPerfCtl {
     }
 
     // 托盘显示档：极客位 > 自定义位 > V 目标档 > Cur（ITS-0 在托盘语境即省电）
-    static uint DisplayMode() {
+    public static uint DisplayMode() {
         uint vs = Read("ITS_SE_VantageSetting");
         if ((vs & 4) != 0) return 4;
         if ((vs & 8) != 0) return 5;
@@ -261,6 +286,7 @@ static class LenovoPerfCtl {
         readonly ToolStripMenuItem[] modeItems = new ToolStripMenuItem[6];
         ToolStripMenuItem autoStartItem;
         ToolStripMenuItem aiItem;
+        ToolStripMenuItem smartItem;
         readonly System.Windows.Forms.Timer timer;
         readonly Icon[] icons = new Icon[6];
         uint shownMode = 99;
@@ -275,8 +301,16 @@ static class LenovoPerfCtl {
                 Text = "联想性能控制"
             };
             RegisterHotKeys();
-            timer = new System.Windows.Forms.Timer { Interval = 3000 };
-            timer.Tick += (s, e) => Refresh();
+            if (Sensors.Available) { Sensors.Update(); Log(string.Format("传感器: 已启用 CPU={0}C GPU={1}C 负载={2}%", Sensors.CpuTemp(), Sensors.GpuTemp(), Sensors.CpuLoad())); } else Log("传感器: 未启用（缺 LibreHardwareMonitorLib.dll） " + (Sensors.InitError ?? ""));
+            timer = new System.Windows.Forms.Timer { Interval = 2000 };
+            timer.Tick += (s, e) => {
+                if (Sensors.Available) Sensors.Update();
+                if (SmartEngine.Enabled) {
+                    uint target = SmartEngine.Evaluate();
+                    if (target != 0 && target != DisplayMode()) Switch(target, false);
+                }
+                Refresh();
+            };
             Refresh();
             timer.Start();
         }
@@ -300,6 +334,15 @@ static class LenovoPerfCtl {
                 Refresh();
             };
             m.Items.Add(aiItem);
+            smartItem = new ToolStripMenuItem("智能调度（温度自适应）");
+            smartItem.Click += (s, e) => {
+                SmartEngine.Enabled = !SmartEngine.Enabled;
+                Config.Set("smart", SmartEngine.Enabled ? "1" : "0");
+                Log((SmartEngine.Enabled ? "开启" : "关闭") + " 智能调度");
+                Osd.Show("智能调度：" + (SmartEngine.Enabled ? "开" : "关"), Color.MediumPurple);
+                Refresh();
+            };
+            m.Items.Add(smartItem);
             m.Items.Add(new ToolStripSeparator());
             autoStartItem = new ToolStripMenuItem("开机自启+保活");
             autoStartItem.Click += (s, e) => {
@@ -331,7 +374,8 @@ static class LenovoPerfCtl {
             if (!okQ) Osd.Show("⚠ Ctrl+Alt+Q 被其他程序占用", Color.OrangeRed);
         }
 
-        void Switch(uint mode) {
+        void Switch(uint mode, bool manual = true) {
+            if (manual) SmartEngine.NotifyManualSwitch();
             string r = ApplyMode(mode);
             // 调度器完整应用有延迟（实测性能档最长约12秒），两次读回校验
             System.Threading.Thread.Sleep(800);
@@ -350,12 +394,21 @@ static class LenovoPerfCtl {
 
         void Refresh() {
             uint cur = DisplayMode();
-            if (cur == shownMode) return;
+            bool modeChanged = cur != shownMode;
             shownMode = cur;
             icon.Icon = icons[Math.Min((int)cur, 5)];
-            icon.Text = "联想性能控制 - " + Name(cur) + "模式";
+            string tip = "联想性能控制 - " + Name(cur) + "模式";
+            if (Sensors.Available) {
+                var cpuT = Sensors.CpuTemp(); var gpuT = Sensors.GpuTemp();
+                if (cpuT.HasValue) tip += " | CPU " + cpuT.Value.ToString("0") + "°";
+                if (gpuT.HasValue) tip += " GPU " + gpuT.Value.ToString("0") + "°";
+            }
+            if (SmartEngine.Enabled) tip += " [调度]";
+            if (tip.Length > 63) tip = tip.Substring(0, 63);
+            icon.Text = tip;
             for (uint i = 1; i <= 4; i++) modeItems[i].Checked = (i == cur);
             if (aiItem != null) aiItem.Checked = AiAutoOn();
+            if (smartItem != null) smartItem.Checked = SmartEngine.Enabled;
             autoStartItem.Checked = AutoStartEnabled();
         }
 
@@ -389,6 +442,10 @@ static class LenovoPerfCtl {
         try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
 
         if (args.Length == 0) {
+            Config.Load(System.IO.Path.Combine(Application.StartupPath, "LenovoPerfCtl.json"));
+            Sensors.Init();
+            SmartEngine.LoadConfig(System.IO.Path.Combine(Application.StartupPath, "LenovoPerfCtl.json"));
+            SmartEngine.Enabled = Config.Get("smart") == "1";
             // 托盘模式：需要管理员（注册表 HKLM + ControlService）
             if (!IsAdmin()) { RelaunchElevated(); return; }
             bool created;

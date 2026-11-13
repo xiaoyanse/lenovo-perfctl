@@ -12,6 +12,9 @@
 - **四档直切**：右键菜单四档 / `Ctrl+Alt+1/2/3/4` 直切 / `Ctrl+Alt+Q` 循环
 - **切档 OSD**：屏幕大字提示 + 自动读回校验（真生效才显示 ✓）
 - **AI 自动切换开关**：调度器智能引擎（VantageSetting bit1）的开/关入口
+- **温度自适应智能调度**：CPU/GPU 温度 + 负载 + 电源状态自动切四档
+  （高温升档散热、低温轻载降档、电池锁智能、手动切档后 10 分钟优先；阈值在 `LenovoPerfCtl.json` 可调）
+- **托盘温度显示**：悬停图标看 CPU/GPU 实时温度
 - **开机自启 + 保活**：计划任务双触发器（登录拉起 + 每 5 分钟守护，崩溃自动复活）
 - **CLI 模式**：`get` / `set auto|cool|perf|geek`（管理员终端）
 
@@ -66,6 +69,22 @@ C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe -nologo -target:winexe ^
 
 - 需要 `LenovoProcessManagement` 服务（联想驱动包自带，**勿禁用/卸载**）
 - 切档需要管理员权限（工具托盘模式自动 UAC 提权）
+
+## 温度传感器依赖
+
+温度读取集成 [LibreHardwareMonitorLib](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)（MPL-2.0 开源）。
+所需 DLL 已随仓库提供（与源码同级，编译后放 exe 同目录即用），第三方许可见 `THIRD-PARTY-NOTICES.md`；
+缺失时工具自动降级（无温度显示，智能调度不可用），不影响四档切换主功能。
+
+```json
+// LenovoPerfCtl.json 阈值示例（缺省用内置默认值）
+cpu_hot=88
+cpu_cool=62
+gpu_hot=80
+load_high=65
+hot_sec=10
+cool_sec=60
+```
 
 ## 声明
 
