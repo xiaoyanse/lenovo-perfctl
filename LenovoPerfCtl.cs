@@ -290,6 +290,8 @@ static class LenovoPerfCtl {
         readonly System.Windows.Forms.Timer timer;
         readonly Icon[] icons = new Icon[6];
         uint shownMode = 99;
+        DateTime oursSwitchAt = DateTime.MinValue;
+
 
         public TrayApp() {
             CreateHandle(new CreateParams());
@@ -338,6 +340,11 @@ static class LenovoPerfCtl {
             smartItem.Click += (s, e) => {
                 SmartEngine.Enabled = !SmartEngine.Enabled;
                 Config.Set("smart", SmartEngine.Enabled ? "1" : "0");
+                // 层级仲裁：我们的调度接管时关闭联想 AI 引擎，避免两套引擎互相改档
+                if (SmartEngine.Enabled && AiAutoOn()) {
+                    SetAiAuto(false);
+                    Log("调度接管：已关闭联想 AI 自动切换");
+                }
                 Log((SmartEngine.Enabled ? "开启" : "关闭") + " 智能调度");
                 Osd.Show("智能调度：" + (SmartEngine.Enabled ? "开" : "关"), Color.MediumPurple);
                 Refresh();
@@ -376,6 +383,7 @@ static class LenovoPerfCtl {
 
         void Switch(uint mode, bool manual = true) {
             if (manual) SmartEngine.NotifyManualSwitch();
+            oursSwitchAt = DateTime.Now;
             string r = ApplyMode(mode);
             // 调度器完整应用有延迟（实测性能档最长约12秒），两次读回校验
             System.Threading.Thread.Sleep(800);
@@ -395,7 +403,18 @@ static class LenovoPerfCtl {
         void Refresh() {
             uint cur = DisplayMode();
             bool modeChanged = cur != shownMode;
+            uint prev = shownMode;
             shownMode = cur;
+            // 层级仲裁：检测外部切档（Fn+Q 等不经过本工具的档位变化）
+            // 我们自己的切档有 8 秒时间戳+目标档标记；其余变化视为外部干预 → 调度让位
+            if (modeChanged && prev != 99 && SmartEngine.Enabled) {
+                bool ours = (DateTime.Now - oursSwitchAt).TotalSeconds < 8;
+                if (!ours) {
+                    SmartEngine.NotifyManualSwitch();
+                    Log(string.Format("外部切档 {0}->{1}（Fn+Q/系统），调度暂停{2}分钟",
+                        Name(prev), Name(cur), SmartEngine.PauseMin));
+                }
+            }
             icon.Icon = icons[Math.Min((int)cur, 5)];
             string tip = "联想性能控制 - " + Name(cur) + "模式";
             if (Sensors.Available) {

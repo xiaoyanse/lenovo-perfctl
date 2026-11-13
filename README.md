@@ -34,12 +34,17 @@ LenovoPerfCtl.exe set auto|cool|perf|geek|1-5
 
 ## 编译
 
-系统自带编译器，无需安装任何依赖：
+系统自带编译器，无需安装任何构建工具（管理员终端，仓库根目录执行）：
 
 ```
-C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe -nologo -target:winexe ^
-  -out:LenovoPerfCtl.exe -r:System.Windows.Forms.dll -r:System.Drawing.dll LenovoPerfCtl.cs
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe -nologo -target:winexe -codepage:65001 ^
+  -out:LenovoPerfCtl.exe ^
+  -r:System.Windows.Forms.dll -r:System.Drawing.dll -r:LibreHardwareMonitorLib.dll ^
+  LenovoPerfCtl.cs Sensors.cs SmartEngine.cs
 ```
+
+编译产物 `LenovoPerfCtl.exe` 与仓库内的 DLL 同目录即可运行（缺 DLL 时自动降级，四档切换不受影响，
+仅温度监控与智能调度不可用）。也可以直接到本仓库 Releases 页下载编译好的完整包。
 
 ## 工作原理
 
