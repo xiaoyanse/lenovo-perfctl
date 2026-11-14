@@ -41,7 +41,7 @@ LenovoPerfCtl.exe set auto|cool|perf|geek|1-5
 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe -nologo -target:winexe -codepage:65001 ^
   -out:dist\LenovoPerfCtl.exe ^
   -r:System.Windows.Forms.dll -r:System.Drawing.dll -r:dist\LibreHardwareMonitorLib.dll ^
-  src\LenovoPerfCtl.cs src\Sensors.cs src\SmartEngine.cs src\SchedMode.cs src\Osd.cs
+  src\LenovoPerfCtl.cs src\Sensors.cs src\SmartEngine.cs src\SchedMode.cs src\Osd.cs src\MenuStyle.cs
 ```
 
 目录布局：`src/` 源码、`dist/` 完整运行包（exe + 全部依赖 DLL，即编译产物目录）。

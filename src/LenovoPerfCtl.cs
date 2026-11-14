@@ -239,14 +239,20 @@ static class LenovoPerfCtl {
         readonly ContextMenuStrip menu;
         readonly ToolStripMenuItem[] modeItems = new ToolStripMenuItem[6];
         ToolStripMenuItem autoStartItem;
+        ToolStripMenuItem headerItem;
         readonly ToolStripMenuItem[] schedItems = new ToolStripMenuItem[3];
         readonly System.Windows.Forms.Timer timer;
         readonly Icon[] icons = new Icon[6];
         uint shownMode = 99;
         DateTime oursSwitchAt = DateTime.MinValue;
+        readonly SynchronizationContext uiCtx;   // 后台线程回 UI 的投递通道
+        volatile bool switching;                 // 切档进行中（防连点堆叠）
+        bool? autoStartCache;                    // 自启状态缓存（schtasks 查询慢，UI 不再每 tick 同步等）
+        DateTime autoStartChecked = DateTime.MinValue;
 
 
         public TrayApp() {
+            uiCtx = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
             CreateHandle(new CreateParams());
             menu = BuildMenu();
             for (uint i = 0; i <= 5; i++) icons[i] = MakeIcon(ModeColor[i]);
@@ -272,13 +278,18 @@ static class LenovoPerfCtl {
 
         ContextMenuStrip BuildMenu() {
             var m = new ContextMenuStrip();
+            MenuStyle.Apply(m);
+            // 顶部状态头（只读：当前档位·温度·调度方）
+            headerItem = new ToolStripMenuItem(" ") { Enabled = false };
+            m.Items.Add(headerItem);
+            m.Items.Add(new ToolStripSeparator());
             // 调度模式三选一（互斥单选，谁开车一目了然）
             for (int i = 0; i < 3; i++) {
                 int sm = i;
                 var it = new ToolStripMenuItem("○ " + SchedMode.Name(sm));
                 it.Click += (s, e) => {
                     SchedMode.Set(sm);
-                    Osd.Show("调度：" + SchedMode.Name(sm), Color.MediumPurple);
+                    Osd.Show(SchedMode.Name(sm), "调度模式");
                     Refresh();
                 };
                 schedItems[i] = it;
@@ -295,8 +306,10 @@ static class LenovoPerfCtl {
             m.Items.Add(new ToolStripSeparator());
             autoStartItem = new ToolStripMenuItem("开机自启+保活");
             autoStartItem.Click += (s, e) => {
-                if (!SetAutoStart(!AutoStartEnabled()))
+                if (!SetAutoStart(!AutoStartEnabledCached()))
                     icon.ShowBalloonTip(2000, "联想性能控制", "设置自启失败（需要管理员权限）", ToolTipIcon.Warning);
+                autoStartCache = AutoStartEnabled(); // 点击路径同步回填缓存
+                autoStartChecked = DateTime.Now;
                 Refresh();
             };
             m.Items.Add(autoStartItem);
@@ -320,26 +333,38 @@ static class LenovoPerfCtl {
             bool okQ = RegisterHotKey(Handle, 9, MOD_CONTROL | MOD_ALT, 0x51); // 'Q'
             sb.Append("Ctrl+Alt+Q").Append(okQ ? "√" : "×被占用");
             Log("热键注册: " + sb);
-            if (!okQ) Osd.Show("⚠ Ctrl+Alt+Q 被其他程序占用", Color.OrangeRed);
+            if (!okQ) Osd.Show("Ctrl+Alt+Q 被占用", "热键已被其他程序使用");
         }
 
+        // 切档全程后台执行（ApplyMode+读回校验含 0.8~3.8s 等待，曾直接睡在 UI 线程导致频繁卡死）
         void Switch(uint mode, bool manual = true) {
+            if (switching) return; // 上一轮未完成，忽略连点
+            switching = true;
             if (manual) SchedMode.Set(SchedMode.Manual); // 手动切档 = 接管回手动
             oursSwitchAt = DateTime.Now;
-            string r = ApplyMode(mode);
-            // 调度器完整应用有延迟（实测性能档最长约12秒），两次读回校验
-            System.Threading.Thread.Sleep(800);
-            bool ok = Verify(mode);
-            if (!ok) {
-                System.Threading.Thread.Sleep(3000);
-                ok = Verify(mode);
-            }
-            string verdict = ok ? "✓已生效" : "⚠未生效 " + Signature();
-            Log(string.Format("切档 {0} => {1} {2}", Name(mode), r, verdict));
-            shownMode = 99; // 强制刷新
-            Refresh();
-            Osd.Show((ok ? "● " : "●? ") + Name(mode) + "模式 " + (manual ? "[手动]" : "[温控]")
-                + "  " + (ok ? "已生效" : "未生效"), ModeColor[Math.Min((int)mode, 5)]);
+            shownMode = 99; Refresh();
+            Osd.Show(Name(mode) + "模式", "切换中 · " + (manual ? "手动调度" : "温度自适应"));
+            uint m = mode; bool man = manual;
+            ThreadPool.QueueUserWorkItem(delegate {
+                string r = ApplyMode(m);
+                // 调度器完整应用有延迟（实测性能档最长约12秒），两次读回校验
+                System.Threading.Thread.Sleep(800);
+                bool ok = Verify(m);
+                if (!ok) {
+                    System.Threading.Thread.Sleep(3000);
+                    ok = Verify(m);
+                }
+                bool okF = ok;
+                uiCtx.Post(delegate {
+                    Log(string.Format("切档 {0} => {1} {2}", Name(m), r,
+                        okF ? "✓已生效" : "⚠未生效 " + Signature()));
+                    shownMode = 99; // 强制刷新
+                    Refresh();
+                    Osd.Show(Name(m) + "模式",
+                        (okF ? "已生效" : "未生效") + " · " + (man ? "手动调度" : "温度自适应"));
+                }, null);
+                switching = false;
+            });
         }
 
         void Refresh() {
@@ -370,21 +395,49 @@ static class LenovoPerfCtl {
             icon.Text = tip;
             for (uint i = 1; i <= 4; i++) modeItems[i].Checked = (i == cur);
             for (int i = 0; i < 3; i++) schedItems[i].Text = (i == sm ? "● " : "○ ") + SchedMode.Name(i);
-            autoStartItem.Checked = AutoStartEnabled();
+            if (headerItem != null) {
+                string head = Name(cur) + "模式 · " + SchedMode.Name(sm) + "调度";
+                var cpuT = Sensors.CpuTemp();
+                if (cpuT.HasValue) head = cpuT.Value.ToString("0") + "°C · " + head;
+                headerItem.Text = head;
+            }
+            autoStartItem.Checked = AutoStartEnabledCached();
+        }
+
+        // schtasks 查询在系统忙时可卡数秒：UI 只读缓存，过期后由后台线程刷新
+        bool AutoStartEnabledCached() {
+            if (autoStartCache.HasValue && (DateTime.Now - autoStartChecked).TotalSeconds < 60)
+                return autoStartCache.Value;
+            if (!autoStartCache.HasValue || (DateTime.Now - autoStartChecked).TotalSeconds >= 60) {
+                autoStartChecked = DateTime.Now; // 标记本次检查发起，防重复起线程
+                ThreadPool.QueueUserWorkItem(delegate {
+                    bool v = AutoStartEnabled();
+                    autoStartCache = v;
+                    autoStartChecked = DateTime.Now;
+                    uiCtx.Post(delegate { if (autoStartItem != null) autoStartItem.Checked = v; }, null);
+                });
+            }
+            return autoStartCache ?? false;
         }
 
         static Icon MakeIcon(Color c) {
             using (var bmp = new Bitmap(16, 16)) {
                 using (var g = Graphics.FromImage(bmp)) {
+                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                     g.Clear(Color.Transparent);
-                    using (var b = new SolidBrush(c)) g.FillEllipse(b, 1, 1, 14, 14);
-                    g.DrawEllipse(Pens.White, 1, 1, 14, 14);
+                    using (var pen = new Pen(c, 2.6f)) g.DrawEllipse(pen, 2.6f, 2.6f, 10.8f, 10.8f); // 色环
+                    using (var b = new SolidBrush(c)) g.FillEllipse(b, 6.4f, 6.4f, 3.2f, 3.2f);        // 中心点
                 }
                 return (Icon)Icon.FromHandle(bmp.GetHicon()).Clone();
             }
         }
 
         protected override void WndProc(ref Message m) {
+            // 系统深浅色切换广播 → 界面主题实时跟随
+            if (m.Msg == 0x1A && Marshal.PtrToStringUni(m.LParam) == "ImmersiveColorSet") {
+                MenuStyle.RefreshTheme();
+                Log("系统主题切换，已跟随为" + (MenuStyle.IsDark ? "深色" : "浅色"));
+            }
             if (m.Msg == WM_HOTKEY) {
                 int id = m.WParam.ToInt32();
                 Log("收到热键 id=" + id);

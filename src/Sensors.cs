@@ -39,20 +39,24 @@ static class Sensors {
     }
 
     static void PollLoop() {
-        int stalls = 0;
+        int stalls = 0, slows = 0;
         while (running) {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try { host.Update(); } catch (Exception ex) {
                 LenovoPerfCtl.Log("传感器轮询异常，停用: " + ex.Message);
                 break;
             }
-            if (sw.ElapsedMilliseconds > StallMs) {
+            long ms = sw.ElapsedMilliseconds;
+            if (ms > 30000) { // 真挂起才计入熔断
                 stalls++;
-                LenovoPerfCtl.Log("传感器轮询卡顿 " + sw.ElapsedMilliseconds + "ms（" + stalls + "/" + StallLimit + "）");
+                LenovoPerfCtl.Log("传感器轮询挂起 " + ms + "ms（" + stalls + "/" + StallLimit + "）");
                 if (stalls >= StallLimit) {
-                    LenovoPerfCtl.Log("传感器连续卡顿，熔断停用（温度显示与温控调度降级）");
+                    LenovoPerfCtl.Log("传感器连续挂起，熔断停用（温度显示与温控调度降级）");
                     break;
                 }
+            } else if (ms > StallMs) { // 慢轮询常见于高负载（数据晚几秒不影响调度），只低频记录
+                slows++;
+                if (slows % 10 == 1) LenovoPerfCtl.Log("传感器轮询偏慢 " + ms + "ms（周期性，不影响调度）");
             } else stalls = 0;
             float? c = host.CpuTemp(), g = host.GpuTemp(), l = host.CpuLoad(), m = host.MemLoad();
             cpuT = c ?? float.NaN; gpuT = g ?? float.NaN; load = l ?? float.NaN; mem = m ?? float.NaN;
