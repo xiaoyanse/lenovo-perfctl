@@ -256,10 +256,10 @@ static class LenovoPerfCtl {
                 Text = "联想性能控制"
             };
             RegisterHotKeys();
-            if (Sensors.Available) { Sensors.Update(); Log(string.Format("传感器: 已启用 CPU={0}C GPU={1}C 负载={2}%", Sensors.CpuTemp(), Sensors.GpuTemp(), Sensors.CpuLoad())); } else Log("传感器: 未启用（缺 LibreHardwareMonitorLib.dll） " + (Sensors.InitError ?? ""));
+            if (Sensors.Available) Log(string.Format("传感器: 已启用（后台轮询）CPU={0}C GPU={1}C 负载={2}%", Sensors.CpuTemp(), Sensors.GpuTemp(), Sensors.CpuLoad())); else Log("传感器: 未启用（缺 LibreHardwareMonitorLib.dll） " + (Sensors.InitError ?? ""));
             timer = new System.Windows.Forms.Timer { Interval = 2000 };
             timer.Tick += (s, e) => {
-                if (Sensors.Available) Sensors.Update();
+                // 传感器轮询已在 Sensors 后台线程，UI 线程只读缓存（防 LHM 卡顿拖死 UI）
                 if (SmartEngine.Enabled) {
                     uint target = SmartEngine.Evaluate();
                     if (target != 0 && target != DisplayMode()) Switch(target, false);
