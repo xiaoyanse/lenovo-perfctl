@@ -11,9 +11,10 @@
 - **托盘常驻**：图标颜色随模式（蓝=智能、绿=省电、橙=性能、红=极客），3 秒与系统状态同步
 - **四档直切**：右键菜单四档 / `Ctrl+Alt+1/2/3/4` 直切 / `Ctrl+Alt+Q` 循环
 - **切档 OSD**：屏幕大字提示 + 自动读回校验（真生效才显示 ✓）
-- **AI 自动切换开关**：调度器智能引擎（VantageSetting bit1）的开/关入口
-- **温度自适应智能调度**：CPU/GPU 温度 + 负载 + 电源状态自动切四档
-  （高温升档散热、低温轻载降档、电池锁智能、手动切档后 10 分钟优先；阈值在 `LenovoPerfCtl.json` 可调）
+- **调度模式三选一（互斥）**：手动（档位锁定不被自动改）/ 联想 AI 引擎 / 温度自适应
+  （CPU/GPU 温度 + 负载 + 电源状态自动切四档：高温升档散热、低温轻载降档、电池锁智能；
+  阈值在 `LenovoPerfCtl.json` 可调）。
+  任何手动切档（菜单/热键/Fn+Q/CLI）自动接管为手动模式，托盘提示显示当前谁在开车
 - **托盘温度显示**：悬停图标看 CPU/GPU 实时温度
 - **开机自启 + 保活**：计划任务双触发器（登录拉起 + 每 5 分钟守护，崩溃自动复活）
 - **CLI 模式**：`get` / `set auto|cool|perf|geek`（管理员终端）
@@ -38,13 +39,14 @@ LenovoPerfCtl.exe set auto|cool|perf|geek|1-5
 
 ```
 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe -nologo -target:winexe -codepage:65001 ^
-  -out:LenovoPerfCtl.exe ^
-  -r:System.Windows.Forms.dll -r:System.Drawing.dll -r:LibreHardwareMonitorLib.dll ^
-  LenovoPerfCtl.cs Sensors.cs SmartEngine.cs
+  -out:dist\LenovoPerfCtl.exe ^
+  -r:System.Windows.Forms.dll -r:System.Drawing.dll -r:dist\LibreHardwareMonitorLib.dll ^
+  src\LenovoPerfCtl.cs src\Sensors.cs src\SmartEngine.cs src\SchedMode.cs src\Osd.cs
 ```
 
-编译产物 `LenovoPerfCtl.exe` 与仓库内的 DLL 同目录即可运行（缺 DLL 时自动降级，四档切换不受影响，
-仅温度监控与智能调度不可用）。也可以直接到本仓库 Releases 页下载编译好的完整包。
+目录布局：`src/` 源码、`dist/` 完整运行包（exe + 全部依赖 DLL，即编译产物目录）。
+缺 DLL 时自动降级，四档切换不受影响，仅温度监控与智能调度不可用；
+也可以直接到本仓库 Releases 页下载编译好的完整包。
 
 ## 工作原理
 
@@ -78,7 +80,7 @@ C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe -nologo -target:winexe -
 ## 温度传感器依赖
 
 温度读取集成 [LibreHardwareMonitorLib](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)（MPL-2.0 开源）。
-所需 DLL 已随仓库提供（与源码同级，编译后放 exe 同目录即用），第三方许可见 `THIRD-PARTY-NOTICES.md`；
+所需 DLL 已随仓库提供于 `dist/` 目录（与 exe 同级，开箱即用），第三方许可见 `THIRD-PARTY-NOTICES.md`；
 缺失时工具自动降级（无温度显示，智能调度不可用），不影响四档切换主功能。
 
 ```json
